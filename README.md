@@ -1,13 +1,8 @@
 # Cross-Country EM Local Rates Relative Value
 
-A six-factor, point-in-time macro model that ranks 17 emerging-market
-local-currency rates markets against each other and trades the dispersion as a
+EM Local Rates RV model using six distinct factors to ranks 17 different emerging-market
+local-currency rates markets against each other. We trade the dispersion as a
 market-neutral, volatility-targeted book of 5-year receivers.
-
-Everything here runs on **real, downloaded data**. There is no synthetic panel.
-Every input comes from a public endpoint listed below, is cached in `data/raw/`
-with a provenance manifest, and is aligned to the date it was actually
-published.
 
 ```bash
 pip install -r requirements.txt
@@ -16,11 +11,6 @@ python run.py                           # backtest + diagnostics -> output/
 python live.py --capital 10000000       # today's target book and trade list
 python -m pytest -q tests               # look-ahead tests
 ```
-
-Before putting money on it, read [`HANDOFF.md`](HANDOFF.md). It lists what a
-live deployment still needs from you: licensed data, executable quotes, dealer
-documentation and market access.
-
 ---
 
 ## 1. Results (real data, out of sample)
