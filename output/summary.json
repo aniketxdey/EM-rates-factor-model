@@ -1,0 +1,113 @@
+{
+  "generated_utc": "2026-09-29 18:10:16.581390+00:00",
+  "oos_window": [
+    "2011-02",
+    "2026-07"
+  ],
+  "universe": [
+    "BRL",
+    "CLP",
+    "COP",
+    "CZK",
+    "HUF",
+    "IDR",
+    "INR",
+    "KRW",
+    "MXN",
+    "MYR",
+    "PEN",
+    "PHP",
+    "PLN",
+    "RON",
+    "THB",
+    "TRY",
+    "ZAR"
+  ],
+  "ridge_net": {
+    "ann_return_pct": 6.3664,
+    "ann_vol_pct": 10.1017,
+    "sharpe": 0.6302,
+    "sharpe_t": 2.4812,
+    "sortino": 1.023,
+    "max_drawdown_pct": -17.9552,
+    "hit_rate": 0.5753,
+    "worst_month_pct": -13.3879,
+    "n_months": 186,
+    "start": "2011-02",
+    "end": "2026-07"
+  },
+  "ridge_gross": {
+    "ann_return_pct": 9.9029,
+    "ann_vol_pct": 10.1092,
+    "sharpe": 0.9796,
+    "sharpe_t": 3.8566,
+    "sortino": 1.6013,
+    "max_drawdown_pct": -14.6498,
+    "hit_rate": 0.6075,
+    "worst_month_pct": -13.0785,
+    "n_months": 186,
+    "start": "2011-02",
+    "end": "2026-07"
+  },
+  "parity_net": {
+    "ann_return_pct": 3.6571,
+    "ann_vol_pct": 9.8819,
+    "sharpe": 0.3701,
+    "sharpe_t": 1.457,
+    "sortino": 0.5749,
+    "max_drawdown_pct": -20.0866,
+    "hit_rate": 0.5323,
+    "worst_month_pct": -10.1977,
+    "n_months": 186,
+    "start": "2011-02",
+    "end": "2026-07"
+  },
+  "beta_ridge_net": {
+    "beta": 0.0277,
+    "beta_t": 0.2515,
+    "alpha_ann_pct": 6.3341,
+    "corr": 0.0185,
+    "n": 186
+  },
+  "ic_composite_ridge": {
+    "mean_ic": 0.0948,
+    "ic_t": 3.6184,
+    "ic_hit": 0.6075,
+    "n_months": 186
+  },
+  "costs_pct_per_year": {
+    "trade": 2.178,
+    "roll": 1.359
+  },
+  "robustness_net_sharpe": {
+    "cost x0": 0.98,
+    "cost x1": 0.63,
+    "cost x2": 0.28,
+    "cost x3": -0.07,
+    "rebalance speed 1": 0.511,
+    "rebalance speed 0.33": 0.683,
+    "subperiod 2011-2015": 0.758,
+    "subperiod 2016-2020": 0.543,
+    "subperiod 2021-2026": 0.623,
+    "excluding TRY": 0.575
+  },
+  "cost_model_bp": {
+    "BRL": 2.0,
+    "CLP": 4.0,
+    "COP": 6.0,
+    "CZK": 2.0,
+    "HUF": 4.0,
+    "IDR": 8.0,
+    "INR": 1.5,
+    "KRW": 1.5,
+    "MXN": 1.5,
+    "MYR": 3.0,
+    "PEN": 10.0,
+    "PHP": 10.0,
+    "PLN": 1.5,
+    "RON": 10.0,
+    "THB": 3.0,
+    "TRY": 30.0,
+    "ZAR": 2.0
+  }
+}

@@ -1,0 +1,7 @@
+,Inflation pressure,Real yield & carry,Terms of trade,Fiscal thrust,FX pass-through,Credit shortfall
+Inflation pressure,1.0,0.344,0.077,0.136,-0.037,-0.031
+Real yield & carry,0.344,1.0,0.027,-0.098,-0.115,-0.108
+Terms of trade,0.077,0.027,1.0,-0.055,0.042,-0.003
+Fiscal thrust,0.136,-0.098,-0.055,1.0,-0.074,-0.149
+FX pass-through,-0.037,-0.115,0.042,-0.074,1.0,0.019
+Credit shortfall,-0.031,-0.108,-0.003,-0.149,0.019,1.0

@@ -1,22 +1,26 @@
 """
-backtest.py -- vol-targeted cross-country relative-value book and diagnostics.
+backtest.py -- market-neutral, vol-targeted book of 5y receivers.
 
-POSITION CONVENTION
-  One unit of signal = one unit of 10%-annualised-vol risk in the local 5y
-  fixed receiver, versus an equally weighted basket of the same risk across
-  all concurrently tradable markets.  Because every leg is already
-  vol-targeted, position sizes are directly comparable between Malaysia and
-  Turkey without a separate DV01 overlay.
+TARGET POSITIONS (all quantities known at cutoff t)
+  1. a   = signal demeaned over tradable markets
+  2. n0  = a / sigma_i        sigma_i = ex-ante annual vol of 1 unit notional
+  3. cap = no market above MAX_RISK_SHARE of gross standalone risk
+  4. beta hedge: remove the component along the equal-risk EM basket so the
+     target has ZERO ex-ante beta to that basket (ex-ante covariance from
+     trailing weekly yield changes, correlations shrunk toward zero)
+  5. scale to TARGET_VOL ex-ante, subject to MAX_GROSS_LEVERAGE
+EXECUTION
+  held = prev + REBALANCE_SPEED * (target - prev); markets that stop being
+  tradable are closed in full.  Steps 1-5 are linear in the signal on a given
+  date and partial adjustment is linear in positions, so PnL decomposes
+  exactly into factor contributions (plus a small clip residual).
 
-TIMING
-  Signals are taken at month end t and held over [t, t+1].  Returns are
-  strictly forward.  One day of slippage is assumed and charged through the
-  cost model rather than by shifting the return series.
-
-WHAT IS DELIBERATELY NOT DONE
-  No optimisation of factor weights, no factor selection, no parameter
-  search on the evaluation sample.  Conceptual parity only.  The regularised
-  learner in learn.py is reported separately and is sequential.
+COSTS (% of capital)
+  trade : |delta notional| * duration * half bid-offer * stress
+  roll  : |notional| * duration * full bid-offer * stress / 12
+          (re-strike once a year to hold constant 5y maturity)
+  stress = max(1, current yield vol / expanding median yield vol), following
+  IMF GFSR (Oct-2025) evidence that EM bid-offer widens with volatility.
 """
 
 from __future__ import annotations
@@ -24,207 +28,244 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from factors import FACTORS, FACTOR_LABELS
+from config import (ANNUAL_ROLL_FRACTION, COV_SHRINK, COV_WINDOW_W, INSTRUMENTS,
+                    MAX_GROSS_LEVERAGE, MAX_RISK_SHARE, MIN_MARKETS,
+                    REBALANCE_SPEED, TARGET_VOL)
+from factors import FACTORS
 
-ANNUAL_VOL_TARGET = 10.0    # % of risk capital
 MONTHS = 12
+RESIDUAL = "clip_residual"
 
 
 # --------------------------------------------------------------------------
-# positions
+# ex-ante risk
 # --------------------------------------------------------------------------
-def signal_to_positions(sig_wide: pd.DataFrame,
-                        tradable: pd.DataFrame,
-                        max_pos: float = 3.0) -> pd.DataFrame:
-    """
-    Convert a cross-sectional signal into a market-neutral relative book.
-
-    Each row is demeaned over tradable markets and scaled so gross risk per
-    period is constant, so PnL is not mechanically larger when the signal
-    happens to be dispersed.
-    """
-    s = sig_wide.where(tradable).clip(-max_pos, max_pos)
-    s = s.sub(s.mean(axis=1), axis=0)                       # market neutral
-    gross = s.abs().sum(axis=1).replace(0, np.nan)
-    return s.div(gross, axis=0).fillna(0.0)
+def ex_ante_cov(wk_bp: pd.DataFrame, cut: pd.Timestamp, ccys: list,
+                sigma: pd.Series) -> np.ndarray:
+    """Annual return covariance (%^2) per unit notional."""
+    w = wk_bp.loc[:cut, ccys].tail(COV_WINDOW_W)
+    corr = w.corr(min_periods=26).reindex(index=ccys, columns=ccys).fillna(0.0).to_numpy()
+    corr = (1 - COV_SHRINK) * corr + COV_SHRINK * np.eye(len(ccys))
+    np.fill_diagonal(corr, 1.0)
+    s = sigma.reindex(ccys).to_numpy()
+    return corr * np.outer(s, s)
 
 
-def threshold_positions(sig_wide: pd.DataFrame,
-                        tradable: pd.DataFrame,
-                        entry: float = 1.0,
-                        exit_: float = 0.15) -> pd.DataFrame:
+def position_operator(sigma: np.ndarray, cov: np.ndarray, a_total: np.ndarray):
     """
-    Transaction-cost-friendly variant: unit long/short with hysteresis.
-    Enter at |signal| > entry, hold until |signal| < exit_.  This is the
-    single most effective turnover control in the literature.
+    Returns (op, exante_vol): op maps a signal vector to target notionals via
+    steps 1-5, with clip multipliers and scale fixed by the TOTAL signal so
+    op is linear.
     """
-    s = sig_wide.where(tradable)
-    pos = pd.DataFrame(0.0, index=s.index, columns=s.columns)
-    state = pd.Series(0.0, index=s.columns)
-    for t in s.index:
-        row = s.loc[t]
-        for c in s.columns:
-            v = row[c]
-            if not np.isfinite(v):
-                state[c] = 0.0
-                continue
-            if state[c] == 0.0:
-                if v > entry:
-                    state[c] = 1.0
-                elif v < -entry:
-                    state[c] = -1.0
-            else:
-                if abs(v) < exit_ or np.sign(v) != state[c]:
-                    state[c] = 0.0
-        pos.loc[t] = state.to_numpy()
-    pos = pos.where(tradable, 0.0)
-    pos = pos.sub(pos.mean(axis=1), axis=0)
-    gross = pos.abs().sum(axis=1).replace(0, np.nan)
-    return pos.div(gross, axis=0).fillna(0.0)
+    n = len(sigma)
+    a = a_total - a_total.mean()
+    risk = np.abs(a)
+    share = risk / risk.sum() if risk.sum() > 0 else np.zeros(n)
+    c = np.where(share > MAX_RISK_SHARE, MAX_RISK_SHARE / np.maximum(share, 1e-12), 1.0)
+    b = (1.0 / n) / sigma
+    cb = cov @ b
+    denom = b @ cb
+
+    def raw(x):
+        x = x - x.mean()
+        n1 = c * x / sigma
+        return n1 - (n1 @ cb) / denom * b
+
+    n2 = raw(a_total)
+    vol = np.sqrt(max(n2 @ cov @ n2, 1e-12))
+    k = TARGET_VOL / vol
+    gross = np.abs(n2).sum()
+    if gross * k > MAX_GROSS_LEVERAGE:
+        k = MAX_GROSS_LEVERAGE / gross
+    return (lambda x: k * raw(x)), k * vol
 
 
 # --------------------------------------------------------------------------
-# pnl
+# main loop
 # --------------------------------------------------------------------------
-def run_book(pos: pd.DataFrame, ret_wide: pd.DataFrame,
-             cost_bp_per_unit_turnover: float = 4.0,
-             scale_to_target: bool = True) -> dict:
+def run_book(fac: pd.DataFrame, signal: pd.Series, wk_bp: pd.DataFrame,
+             parts: dict[str, pd.Series] | None = None,
+             cost_mult: float = 1.0, speed: float = REBALANCE_SPEED,
+             live_last: bool = False) -> dict:
     """
-    Compute gross and net PnL.
-
-    cost_bp_per_unit_turnover: round-trip cost in bp of risk capital for a
-    full 100% gross turnover.  EM local rates bid-offer varies widely and is
-    poorly documented publicly; 4bp is a deliberately conservative placeholder.
+    fac       : panel with factors (long)
+    signal    : composite signal aligned to fac rows
+    parts     : optional {factor: Series} summing to the pre-clip signal, for
+                exact factor attribution
+    live_last : on the final date, size positions for markets with clean
+                data even though the entry print is not yet observable
+                (this is the live trade the model wants today)
     """
-    pos = pos.reindex(columns=ret_wide.columns).fillna(0.0)
-    aligned = ret_wide.reindex(pos.index)
-    gross = (pos * aligned).sum(axis=1)
+    d = fac.assign(_sig=signal, _row=fac.index)
+    last_date = d["date"].max()
+    bo = pd.Series({c: v["bid_offer_bp"] for c, v in INSTRUMENTS.items()})
+    names = (list(parts) + [RESIDUAL]) if parts is not None else []
+    vol_hist: dict[str, list] = {}
+    held = pd.Series(dtype=float)
+    held_parts = {k: pd.Series(dtype=float) for k in names}
+    prev_dur = pd.Series(dtype=float)
+    recs, pos_rows, attr_rows = [], [], []
 
-    turnover = pos.diff().abs().sum(axis=1).fillna(pos.abs().sum(axis=1))
-    cost = turnover * cost_bp_per_unit_turnover / 100.0
-    net = gross - cost
+    for t, g in d.groupby("date", sort=True):
+        g = g.set_index("ccy")
+        for c, v in g["yvol_bp"].dropna().items():
+            vol_hist.setdefault(c, []).append(v)
+        is_live = live_last and t == last_date
+        # A position whose exit cannot be marked (feed gap > 31 days, 3 cases
+        # in the sample) is kept and credited zero return rather than being
+        # dropped with hindsight.
+        ok = (g["data_ok"] if is_live else g["tradable"] & g["ret_closed"]) & g["_sig"].notna()
+        live = g[ok]
+        ccys = list(live.index)
 
-    k = 1.0
-    if scale_to_target:
-        v = gross.std() * np.sqrt(MONTHS)
-        k = ANNUAL_VOL_TARGET / v if v > 1e-9 else 1.0
+        target = pd.Series(0.0, index=ccys)
+        target_parts = {k: pd.Series(0.0, index=ccys) for k in names}
+        exante = np.nan
+        if len(ccys) >= MIN_MARKETS:
+            sigma = live["ret_vol"]
+            cov = ex_ante_cov(wk_bp, live["cutoff"].iloc[0], ccys, sigma)
+            op, exante = position_operator(sigma.to_numpy(), cov, live["_sig"].to_numpy())
+            target = pd.Series(op(live["_sig"].to_numpy()), index=ccys)
+            if parts is not None:
+                acc = np.zeros(len(ccys))
+                for k in parts:
+                    v = op(parts[k].loc[live["_row"]].fillna(0.0).to_numpy())
+                    target_parts[k] = pd.Series(v, index=ccys)
+                    acc += v
+                target_parts[RESIDUAL] = pd.Series(target.to_numpy() - acc, index=ccys)
+        else:
+            ccys = []
 
+        def _adjust(prev, tgt):
+            p = prev.reindex(ccys).fillna(0.0)
+            return p + speed * (tgt.reindex(ccys).fillna(0.0) - p)
+
+        new = _adjust(held, target)
+        new_parts = {k: _adjust(held_parts[k], target_parts[k]) for k in names}
+
+        ret = g["ret_fwd"].reindex(ccys).fillna(0.0)
+        gross = float((new * ret).sum()) if ccys and not is_live else 0.0
+
+        # ---- costs ------------------------------------------------------
+        allc = new.index.union(held.index)
+        dur = g["mod_dur"].reindex(allc).fillna(prev_dur.reindex(allc)).fillna(4.3)
+        stress = pd.Series({c: max(1.0, g["yvol_bp"].get(c, np.nan) / np.median(vol_hist[c]))
+                            if c in vol_hist and np.isfinite(g["yvol_bp"].get(c, np.nan)) else 1.0
+                            for c in allc}, dtype=float)
+        dn = new.reindex(allc).fillna(0.0) - held.reindex(allc).fillna(0.0)
+        bo_c = bo.reindex(allc) * stress * cost_mult
+        trade_cost = float((dn.abs() * dur * bo_c / 2.0).sum() / 100.0)
+        roll_cost = float((new.abs() * dur.reindex(new.index) * bo_c.reindex(new.index)).sum()
+                          / 100.0 * ANNUAL_ROLL_FRACTION / MONTHS) if len(new) else 0.0
+
+        if parts is not None and ccys and not is_live:
+            for k in names:
+                attr_rows.append(dict(date=t, factor=k, pnl=float((new_parts[k] * ret).sum())))
+
+        for c in ccys:
+            pos_rows.append(dict(date=t, ccy=c, target=target[c], notional=new[c],
+                                 dv01_yrs=new[c] * dur[c], trade=dn[c], ret=ret[c],
+                                 pnl=np.nan if is_live else new[c] * ret[c],
+                                 signal=live.loc[c, "_sig"], mod_dur=dur[c],
+                                 yld_5y=live.loc[c, "yld_5y"], ret_vol=live.loc[c, "ret_vol"]))
+        for c in held.index.difference(ccys):
+            if abs(held[c]) > 0:
+                pos_rows.append(dict(date=t, ccy=c, target=0.0, notional=0.0, dv01_yrs=0.0,
+                                     trade=-held[c], ret=np.nan, pnl=0.0, signal=np.nan,
+                                     mod_dur=dur[c], yld_5y=np.nan, ret_vol=np.nan))
+
+        recs.append(dict(date=t, gross=gross, trade_cost=trade_cost, roll_cost=roll_cost,
+                         net=gross - trade_cost - roll_cost, n_mkts=len(ccys),
+                         gross_lev=float(new.abs().sum()), exante_vol=exante,
+                         dv01_turnover=float((dn.abs() * dur).sum()), live=is_live))
+        held, held_parts, prev_dur = new, new_parts, dur.reindex(new.index)
+
+    res = pd.DataFrame(recs).set_index("date")
     return {
-        "gross": gross * k,
-        "net": net * k,
-        "turnover": turnover,
-        "positions": pos,
-        "leverage": k,
+        "pnl": res,
+        "positions": pd.DataFrame(pos_rows),
+        "attribution": pd.DataFrame(attr_rows),
     }
 
 
-def stats(pnl: pd.Series, bench: pd.Series | None = None) -> dict:
-    p = pnl.dropna()
-    if len(p) < 12:
-        return {}
-    ann_ret = p.mean() * MONTHS
-    ann_vol = p.std() * np.sqrt(MONTHS)
-    downside = p[p < 0].std() * np.sqrt(MONTHS)
-    cum = p.cumsum()
-    dd = (cum - cum.cummax()).min()
-    top5 = p.nlargest(max(int(len(p) * 0.05), 1)).sum()
-    out = {
-        "ann_return_pct": ann_ret,
-        "ann_vol_pct": ann_vol,
-        "sharpe": ann_ret / ann_vol if ann_vol > 1e-9 else np.nan,
-        "sortino": ann_ret / downside if downside and downside > 1e-9 else np.nan,
-        "max_drawdown_pct": dd,
-        "hit_rate": (p > 0).mean(),
-        "pct_pnl_from_top5pct_months": top5 / p.sum() if abs(p.sum()) > 1e-9 else np.nan,
-        "n_months": len(p),
-    }
-    if bench is not None:
-        b = bench.reindex(p.index).dropna()
-        j = p.reindex(b.index)
-        if len(b) > 12 and b.std() > 1e-9:
-            out["corr_to_benchmark"] = float(np.corrcoef(j, b)[0, 1])
-    return out
+def attribution_parts(fac: pd.DataFrame, weights: pd.DataFrame) -> dict[str, pd.Series]:
+    """
+    Factor parts x_f = w_f(t) * z_f / sd_t, where sd_t is the cross-sectional
+    s.d. used to standardise the composite, so sum_f x_f = composite (pre-clip).
+    """
+    w = weights.reindex(fac["date"]).reset_index(drop=True)
+    w.index = fac.index
+    raw = sum(w[f] * fac[f].fillna(0.0) for f in FACTORS).where(fac["data_ok"])
+    sd = raw.groupby(fac["date"]).transform("std").replace(0, np.nan)
+    return {f: (w[f] * fac[f].fillna(0.0) / sd).where(fac["data_ok"]) for f in FACTORS}
+
+
+def weighted_signal(fac: pd.DataFrame, weights: pd.DataFrame) -> pd.Series:
+    """Composite from date-varying factor weights, standardised per date."""
+    w = weights.reindex(fac["date"]).reset_index(drop=True)
+    w.index = fac.index
+    raw = sum(w[f] * fac[f].fillna(0.0) for f in FACTORS).where(fac["data_ok"])
+    g = raw.groupby(fac["date"])
+    return ((raw - g.transform("mean")) / g.transform("std").replace(0, np.nan)).clip(-3, 3)
 
 
 # --------------------------------------------------------------------------
 # diagnostics
 # --------------------------------------------------------------------------
-def information_coefficient(fac: pd.DataFrame, sig_col: str = "composite",
-                            ret_col: str = "ret_fwd_1m") -> dict:
-    """
-    Monthly cross-sectional Spearman IC, plus a pooled t-stat that accounts
-    for the panel structure by clustering on date (the cross-sectional mean
-    of ICs, tested against its own time-series standard error).
-    """
-    d = fac[["date", "ccy", sig_col, ret_col]].dropna()
+def stats(pnl: pd.Series) -> dict:
+    p = pnl.dropna()
+    if len(p) < 12:
+        return {}
+    ann_ret = p.mean() * MONTHS
+    ann_vol = p.std() * np.sqrt(MONTHS)
+    cum = p.cumsum()
+    sr = ann_ret / ann_vol if ann_vol > 1e-9 else np.nan
+    return {
+        "ann_return_pct": ann_ret,
+        "ann_vol_pct": ann_vol,
+        "sharpe": sr,
+        "sharpe_t": sr * np.sqrt(len(p) / MONTHS),
+        "sortino": ann_ret / (p[p < 0].std() * np.sqrt(MONTHS)),
+        "max_drawdown_pct": (cum - cum.cummax()).min(),
+        "hit_rate": (p > 0).mean(),
+        "worst_month_pct": p.min(),
+        "n_months": len(p),
+        "start": str(p.index.min()),
+        "end": str(p.index.max()),
+    }
+
+
+def em_basket(fac: pd.DataFrame) -> pd.Series:
+    """Equal-weight basket of 10%-vol 5y receivers across tradable markets."""
+    d = fac[fac["tradable"] & fac["ret_fwd"].notna()]
+    r = d["ret_fwd"] * (TARGET_VOL / d["ret_vol"])
+    return r.groupby(d["date"]).mean().rename("em_basket")
+
+
+def beta_to_basket(pnl: pd.Series, basket: pd.Series) -> dict:
+    x = pd.concat([pnl.rename("p"), basket.rename("b")], axis=1).dropna()
+    if len(x) < 24:
+        return {}
+    X = np.column_stack([np.ones(len(x)), x["b"].to_numpy()])
+    coef, *_ = np.linalg.lstsq(X, x["p"].to_numpy(), rcond=None)
+    resid = x["p"].to_numpy() - X @ coef
+    s2 = resid.var(ddof=2)
+    se = np.sqrt(s2 * np.linalg.inv(X.T @ X)[1, 1])
+    return {"beta": coef[1], "beta_t": coef[1] / se, "alpha_ann_pct": coef[0] * MONTHS,
+            "corr": float(x.corr().iloc[0, 1]), "n": len(x)}
+
+
+def information_coefficient(fac: pd.DataFrame, col: str, dates=None) -> dict:
+    """Monthly Spearman IC of `col` vs next-month vol-adjusted receiver return."""
+    d = fac[fac["tradable"] & fac["ret_fwd"].notna() & fac[col].notna()]
+    if dates is not None:
+        d = d[d["date"].isin(dates)]
+    y = d["ret_fwd"] / d["ret_vol"]
     ics = []
-    for t, g in d.groupby("date"):
-        if len(g) >= 6 and g[sig_col].std() > 1e-9:
-            ics.append(g[sig_col].corr(g[ret_col], method="spearman"))
+    for _, idx in d.groupby("date").groups.items():
+        if len(idx) >= MIN_MARKETS and d.loc[idx, col].std() > 1e-12:
+            ics.append(d.loc[idx, col].rank().corr(y.loc[idx].rank()))
     ics = pd.Series(ics).dropna()
     se = ics.std() / np.sqrt(len(ics)) if len(ics) > 1 else np.nan
-    return {
-        "mean_ic": ics.mean(),
-        "ic_std": ics.std(),
-        "ic_t_stat": ics.mean() / se if se and se > 1e-9 else np.nan,
-        "ic_hit_rate": (ics > 0).mean(),
-        "n_periods": len(ics),
-    }
-
-
-def factor_attribution(fac: pd.DataFrame, tradable: pd.DataFrame,
-                       ret_wide: pd.DataFrame) -> pd.DataFrame:
-    """Standalone vol-scaled PnL for each factor traded on its own."""
-    rows = []
-    for f in FACTORS:
-        w = fac.pivot(index="date", columns="ccy", values=f + "_rel")
-        pos = signal_to_positions(w, tradable)
-        r = run_book(pos, ret_wide)
-        st = stats(r["gross"])
-        ic = information_coefficient(fac, sig_col=f + "_rel")
-        rows.append({
-            "factor": FACTOR_LABELS[f],
-            "sharpe": st.get("sharpe", np.nan),
-            "sortino": st.get("sortino", np.nan),
-            "max_dd_pct": st.get("max_drawdown_pct", np.nan),
-            "mean_ic": ic.get("mean_ic", np.nan),
-            "ic_t": ic.get("ic_t_stat", np.nan),
-            "ann_turnover_x": r["turnover"].mean() * MONTHS,
-        })
-    return pd.DataFrame(rows).set_index("factor")
-
-
-def country_attribution(pnl_positions: pd.DataFrame,
-                        ret_wide: pd.DataFrame,
-                        leverage: float) -> pd.DataFrame:
-    """Total PnL contribution by country, in % of risk capital."""
-    contrib = (pnl_positions * ret_wide.reindex(pnl_positions.index)) * leverage
-    out = pd.DataFrame({
-        "total_pnl_pct": contrib.sum(),
-        "avg_abs_position": pnl_positions.abs().mean(),
-        "months_held": (pnl_positions.abs() > 1e-6).sum(),
-    })
-    return out.sort_values("total_pnl_pct", ascending=False)
-
-
-def beta_decomposition(pnl: pd.Series, ret_wide: pd.DataFrame) -> dict:
-    """
-    Regress strategy PnL on the equal-weighted basket return, the proxy for
-    'am I just long EM duration beta'.  A relative-value book should show
-    near-zero loading.
-    """
-    bench = ret_wide.mean(axis=1)
-    d = pd.concat([pnl.rename("pnl"), bench.rename("bench")], axis=1).dropna()
-    if len(d) < 24:
-        return {}
-    x = d["bench"].to_numpy()
-    y = d["pnl"].to_numpy()
-    beta = np.cov(x, y)[0, 1] / np.var(x)
-    alpha = y.mean() - beta * x.mean()
-    resid = y - (alpha + beta * x)
-    return {
-        "beta_to_em_basket": beta,
-        "alpha_ann_pct": alpha * MONTHS,
-        "r_squared": 1 - resid.var() / y.var(),
-        "corr": float(np.corrcoef(x, y)[0, 1]),
-    }
+    return {"mean_ic": ics.mean(), "ic_t": ics.mean() / se if se else np.nan,
+            "ic_hit": (ics > 0).mean(), "n_months": len(ics)}

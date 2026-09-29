@@ -1,0 +1,9 @@
+,mean_ic,ic_t,ic_hit,n_months
+Composite (ridge),0.0948,3.6184,0.6075,186.0
+Composite (parity),0.0703,2.8553,0.5968,186.0
+Inflation pressure,0.0177,0.7048,0.4785,186.0
+Real yield & carry,0.1087,4.0978,0.6129,186.0
+Terms of trade,-0.0274,-1.1106,0.4624,186.0
+Fiscal thrust,0.0153,0.6622,0.5108,186.0
+FX pass-through,0.0351,1.5238,0.5538,186.0
+Credit shortfall,0.0224,0.9278,0.5376,186.0

@@ -1,0 +1,11 @@
+,net Sharpe
+cost x0,0.9796
+cost x1,0.6302
+cost x2,0.28
+cost x3,-0.0698
+rebalance speed 1,0.5115
+rebalance speed 0.33,0.6834
+subperiod 2011-2015,0.7577
+subperiod 2016-2020,0.5425
+subperiod 2021-2026,0.6229
+excluding TRY,0.5746
