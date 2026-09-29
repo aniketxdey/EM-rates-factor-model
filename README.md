@@ -13,9 +13,9 @@ python -m pytest -q tests               # look-ahead tests
 ```
 ---
 
-## 1. Results (real data, out of sample)
+## 1. Results
 
-The evaluation window is **Feb-2011 to Jul-2026**: 186 months, starting once the
+The evaluation window is Feb-2011 to Jul-2026: 186 months, starting once the
 expanding-window ridge has 36 months of training history. On average 11.2
 markets pass the data rules each month.
 
@@ -29,12 +29,12 @@ markets pass the data rules each month.
 | Worst month % | −13.1 | −13.4 | −9.6 | −10.2 |
 | Hit rate | 0.61 | 0.58 | 0.59 | 0.53 |
 
-* **Beta to the EM basket:** net PnL beta is **0.028** (t = 0.25, correlation
-  0.02) against an equal-risk basket of 5y receivers in all tradable markets.
-* **Costs:** trading costs 2.18% a year and the annual re-strike roll costs
+* Net PnL beta is **0.028** (t = 0.25, correlation
+  0.02) against an equal-risk basket of 5y receivers
+Trading costs 2.18% a year and the annual re-strike roll costs
   1.36% a year, together **3.5%/yr of the 9.9% gross return**. Average gross
   swap notional is 7.5× capital.
-* **Monthly rank IC** against the next month's vol-adjusted receiver return:
+* Monthly rank IC against the next month's vol-adjusted receiver return:
   0.095 for the ridge composite (t = 3.6) and 0.070 for parity. The mean across
   the six individual factors is 0.029.
 
@@ -47,43 +47,13 @@ markets pass the data rules each month.
 | 2011–15 / 2016–20 / 2021–26 | 0.76 / 0.54 / 0.62 |
 | Excluding Turkey | 0.58 |
 
-The strategy **breaks even at roughly 2.9× the assumed bid-offer**. Getting the
-cost numbers right is the single most important thing to verify before
-trading (see `HANDOFF.md`, item 2).
+The strategy breaks even at roughly 2.9× the assumed bid-offer
 
-### Factor attribution: this is mostly a carry book
-
-PnL is decomposed exactly by factor, because the position map is linear in the
-signal on each date.
-
-| Factor | Mean IC | IC t | PnL contribution, %/yr | Final ridge weight |
-|---|---|---|---|---|
-| **Real yield & carry** | **0.109** | **4.10** | **9.48** | 0.55 |
-| FX pass-through | 0.035 | 1.52 | 0.33 | 0.16 |
-| Fiscal thrust | 0.015 | 0.66 | 0.29 | 0.19 |
-| Terms of trade | −0.027 | −1.11 | 0.03 | 0.00 |
-| Inflation pressure | 0.018 | 0.71 | 0.00 | 0.00 |
-| Credit shortfall | 0.022 | 0.93 | −0.24 | 0.10 |
-
-Real yield and carry earn about 95% of gross PnL. None of the other five
-factors is individually significant on real data. The sign-constrained ridge
-learns this: it zeroes out terms of trade and inflation pressure, and it is
-what lifts net Sharpe from 0.37 (equal weights) to 0.63. An honest description
-is **a risk-adjusted EM carry book with macro tilts**, not a six-way
-diversified macro model.
-
-The largest country contributions (gross, % of capital over the window) are
-HUF +32.9, IDR +32.7, THB +28.9 and PLN +20.6. The largest losses are COP −6.7
-and BRL −1.2. Full tables are in `output/`.
-
-![equity](output/equity_curves.png)
-![weights](output/ridge_weights.png)
-
-### Today's scorecard
+### Scorecard
 
 ![scorecard](output/scorecard.png)
 
-## 2. Data sources (all real, all public)
+## 2. Data
 
 | Input | Source & endpoint | Frequency | Release lag used |
 |---|---|---|---|
@@ -97,42 +67,6 @@ and BRL −1.2. Full tables are in `output/`.
 | Trade openness | World Bank WDI `NE.TRD.GNFS.ZS` | annual | 12 months |
 | QA cross-check only | FRED / OECD MEI 10y (`IRLTLT01xxM156N`) | monthly | n/a |
 | Inflation targets | Central bank framework pages, by effective year (`config.INFLATION_TARGETS`) | — | — |
-
-**Feed validation.** TradingView 10y monthly averages match OECD/FRED closely.
-Correlation of monthly changes is 0.93–0.998 across the 7 overlapping markets,
-and mean absolute level differences are 0.5–14bp. The exception is ZAR at 45bp,
-because the OECD uses a different benchmark bond. See
-`output/data_quality.csv`.
-
-**Bar timestamps.** TradingView stamps some markets at 21:00 UTC on the
-*previous* day. Checking against known holidays (KR 3-Jun-2025, ZA 28-Apr-2025)
-confirmed the correct mapping, and `pipeline/tradingview.py` applies it.
-
-## 3. Point-in-time rules
-
-* **Signal cutoff** is the last calendar day of month *m*. Each macro series
-  counts as known only if its reference period plus its release lag is on or
-  before the cutoff. Lags are conservative upper bounds across the 17
-  publishers. Malaysia and South Africa release CPI in the 3rd–4th week of the
-  following month, so CPI uses a 1-month lag.
-* **Execution** happens at the first 5y print *after* the cutoff. The return
-  runs from that entry to the next month's entry. It is an exact dirty
-  revaluation of a 5y annual-pay par receiver (carry, duration, convexity and
-  aging), minus funding at the BIS policy rate.
-* **Ridge training** only uses months whose return has fully realised: *t−2*
-  and earlier.
-* **Tests:** `tests/test_no_lookahead.py` checks three things. (1) Cutting all
-  daily data at 28-Jun-2019 leaves every earlier signal input, factor and
-  tradability flag unchanged. (2) Scrambling returns from *t−1* onward leaves
-  the weights at *t* unchanged. (3) Positions at *t* don't depend on later
-  returns.
-
-**Known residual look-ahead:** macro series use the *latest* vintage, so
-revisions to CPI, REER, CTOT weights and especially WEO fiscal outturns leak in.
-Historical WEO vintages can't be downloaded by script (see `HANDOFF.md`). The
-one-day spike filter also looks one print ahead to classify a tick as bad.
-
-## 4. Data-quality rules (causal, rule-based, no hand blacklists)
 
 At each cutoff a market is eligible only if all of these hold:
 
@@ -152,7 +86,27 @@ history per market: CZK, HUF, IDR, INR, KRW, MYR, PHP, THB and ZAR from 2008;
 RON from 2011; PLN from 2016; TRY from 2017; BRL, CLP, COP and PEN from 2020;
 MXN from Jul-2025 (TradingView MX history starts Dec-2024).
 
-## 5. The six factors
+
+## 3. Model Rules
+
+* **Signal cutoff** is the last calendar day of month *m*. Each macro series
+  counts as known only if its reference period plus its release lag is on or
+  before the cutoff. Lags are conservative upper bounds across the 17
+  publishers. Malaysia and South Africa release CPI in the 3rd–4th week of the
+  following month, so CPI uses a 1-month lag.
+* **Execution** happens at the first 5y print *after* the cutoff. The return
+  runs from that entry to the next month's entry. It is an exact dirty
+  revaluation of a 5y annual-pay par receiver (carry, duration, convexity and
+  aging), minus funding at the BIS policy rate.
+* **Ridge training** only uses months whose return has fully realised: *t−2*
+  and earlier.
+* **Tests:** `tests/test_no_lookahead.py` checks three things. (1) Cutting all
+  daily data at 28-Jun-2019 leaves every earlier signal input, factor and
+  tradability flag unchanged. (2) Scrambling returns from *t−1* onward leaves
+  the weights at *t* unchanged. (3) Positions at *t* don't depend on later
+  returns.
+
+## 4. Factors
 
 All factors are oriented so that positive means the 5y receiver is expected
 to **outperform** the basket. Each is standardised cross-sectionally at every
@@ -178,7 +132,7 @@ per unit of ex-ante vol, demeaned across markets. The penalty
 rank IC. Weights are normalised to sum to 1, and parity weights are used before
 36 months of history.
 
-## 6. Portfolio construction and costs
+## 5. Portfolio construction and costs
 
 1. Demean the signal over tradable markets and divide by each market's ex-ante
    vol. That vol is an EWMA of weekly 5y changes (26-week half-life) times
@@ -212,23 +166,8 @@ evidence that EM spreads widen in stress.
 | IDR | 8.0 | PEN | 10 | PHP | 10 |
 | RON | 10 | TRY | 30 | | |
 
-## 7. Limitations
 
-1. **The model is trained on government bond yields but trades swaps (or
-   FX-hedged bonds).** Swap spread moves are not in the backtest.
-2. **Funding is the policy rate**, not the actual floating index (6M WIBOR,
-   3M JIBAR, TIIE and so on). Those indices usually sit 5–40bp above policy,
-   which overstates receiver carry by roughly that amount in IBOR markets.
-3. **Latest-vintage macro data** (see §3). Fiscal is the most exposed.
-4. **Roll-down is not modelled.** The funded-par-bond revaluation includes
-   pull-to-par but assumes a flat curve for aging.
-5. **Short histories** for BRL, CLP, COP, PEN and MXN, and for PLN and TRY
-   before 2016–17.
-6. **Terms of trade uses a 4-month-lagged IMF index.** A timelier version
-   would rebuild it from daily commodity prices.
-7. **Capacity isn't modelled.** Costs are for normal clip sizes.
-
-## 8. Repository layout
+## 6. Repository layout
 
 ```
 config.py            universe, source IDs, release lags, targets, instruments, costs, risk limits
