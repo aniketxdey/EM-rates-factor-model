@@ -165,23 +165,3 @@ evidence that EM spreads widen in stress.
 | CLP | 4.0 | HUF | 4.0 | COP | 6.0 |
 | IDR | 8.0 | PEN | 10 | PHP | 10 |
 | RON | 10 | TRY | 30 | | |
-
-
-## 6. Repository layout
-
-```
-config.py            universe, source IDs, release lags, targets, instruments, costs, risk limits
-pipeline/
-  sources.py         one fetcher per public source
-  tradingview.py     minimal TradingView websocket client (TVC bond yields)
-  net.py             HTTP retries, raw cache, provenance manifest
-  fetch_all.py       python -m pipeline.fetch_all
-panel.py             point-in-time monthly panel, QA rules, receiver returns
-factors.py           six factors, robust cross-sectional z-scores
-learn.py             sequential sign-constrained ridge (scikit-learn)
-backtest.py          positions, beta hedge, vol target, costs, attribution, IC, beta
-run.py               research report -> output/
-live.py              today's target DV01 book, trade list, pre-trade checks
-tests/               look-ahead tests
-HANDOFF.md           what you need to provide before trading real money
-```
