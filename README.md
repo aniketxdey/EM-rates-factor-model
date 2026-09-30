@@ -1,6 +1,6 @@
-# Cross-Country EM Local Rates Relative Value
+# A Novel Six-Factor, Cross-Country Relative Value Model for EM Local Rates
 
-EM Local Rates RV model using six distinct factors to rank 17 different emerging-market
+We present a EM Local Rates RV model using six distinct factors synthesized from systematic macro literature to rank 17 different emerging-market
 local-currency rates markets against each other. We trade the dispersion as a
 market-neutral, volatility-targeted book of 5-year receivers.
 
