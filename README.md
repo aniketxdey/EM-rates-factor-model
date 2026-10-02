@@ -1,6 +1,6 @@
-# Factor Investing in EM Local Rates
+# Factor Investing in EM Local Rates: Study & Relative Value
 
-We present a EM Local Rates RV model using six distinct factors synthesized from systematic macro literature to rank 17 different emerging-marketlocal-currency rates markets against each other. We trade the dispersion as a market-neutral, volatility-targeted book of 5-year receivers.
+We present a relative value model using six distinct factors to rank 17 different emerging-market local-currency IRS swap markets against each other. We trade the dispersion as a market-neutral, volatility-targeted book of 5-year receivers.
 
 ```bash
 pip install -r requirements.txt
