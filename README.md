@@ -53,7 +53,7 @@ The strategy breaks even at roughly 2.9× the assumed bid-offer
 
 ## 2. Data
 
-Swap rates, four-year swap rates,floating fixings government 5y yields, and CPI consensus history data sourced via secure access to Dartmouth Bloomberg terminals (contact aniket.de.27@dartmouth.edu for access). Non-proprietary data is store in /data.
+Swap rates, four-year swap rates,floating fixings government 5y yields, and CPI consensus history data sourced via secure access to Dartmouth Bloomberg terminals (contact aniket.dey.27@dartmouth.edu for access). Non-proprietary data is store in /data.
 
 | Input | Source & endpoint | Frequency | Release lag used |
 |---|---|---|---|
